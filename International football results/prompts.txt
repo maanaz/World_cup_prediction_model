@@ -1,0 +1,242 @@
+You are a Senior Machine Learning Engineer and Python Software Engineer.
+
+I have built a machine learning project in a Jupyter Notebook to predict FIFA World Cup matches.
+
+The notebook works, but it has become very messy because I developed it incrementally during the tournament. There are repeated cells, duplicated code, hard-coded values, and poor organization.
+
+Your job is NOT to rewrite the project from scratch.
+
+Instead, refactor it into a clean, professional, modular notebook while preserving the exact logic and output.
+
+========================
+OBJECTIVES
+========================
+
+1. Remove duplicate code.
+
+2. Convert repetitive blocks into reusable functions.
+
+3. Every function should:
+   - take explicit parameters
+   - return values or dataframes
+   - never silently modify global variables
+   - avoid side effects
+
+4. Organize the notebook into logical sections.
+
+Example:
+
+Imports
+
+↓
+
+Configuration
+
+↓
+
+Load Data
+
+↓
+
+Data Cleaning
+
+↓
+
+Feature Engineering Functions
+
+↓
+
+Feature Engineering
+
+↓
+
+Model Training
+
+↓
+
+Prediction Functions
+
+↓
+
+Visualization Functions
+
+↓
+
+Poisson Score Prediction
+
+↓
+
+Streamlit Ready Functions
+
+5. Do NOT change my machine learning logic unless it is clearly a bug.
+
+6. Keep the notebook readable for someone who is learning machine learning.
+
+7. Do NOT make the code unnecessarily clever.
+
+Readable code is preferred over short code.
+
+========================
+FUNCTION DESIGN
+========================
+
+Create reusable functions whenever possible.
+
+For example:
+
+get_team_form()
+
+get_h2h()
+
+calculate_elo()
+
+engineer_prediction_features()
+
+predict_matches()
+
+ensemble_predict()
+
+predict_fixture()
+
+plot_match_probabilities()
+
+predict_scores()
+
+Each function should have a single responsibility.
+
+========================
+STREAMLIT REQUIREMENTS
+========================
+
+The final notebook should be easy to convert into a Streamlit application.
+
+That means Streamlit should only need something like:
+
+fixture = create_fixture(...)
+
+↓
+
+engineer_prediction_features(...)
+
+↓
+
+predict_fixture(...)
+
+↓
+
+plot_match_probabilities(...)
+
+↓
+
+predict_scores(...)
+
+Avoid any hidden dependencies on notebook variables.
+
+========================
+GLOBAL VARIABLES
+========================
+
+Avoid using global dataframes.
+
+Instead of this:
+
+calculate_elo()
+
+which modifies
+
+elo_data
+
+Use:
+
+elo_data, elo_dict = calculate_elo(df)
+
+Similarly,
+
+engineer_prediction_features()
+
+should return a new dataframe instead of modifying one in-place.
+
+========================
+CONFIGURATION
+========================
+
+Move all constants to the top.
+
+Example:
+
+HOSTS
+
+TOURNAMENT_WEIGHT
+
+FEATURES
+
+DATA_PATH
+
+MODEL_PATH
+
+Avoid hard-coded values inside functions.
+
+========================
+PERFORMANCE
+========================
+
+Do not recalculate expensive operations unnecessarily.
+
+If a dataframe already has engineered features, reuse them.
+
+Only calculate features for new fixtures.
+
+========================
+CODE STYLE
+========================
+
+PEP-8 compliant
+
+Meaningful function names
+
+Meaningful variable names
+
+Clear comments
+
+Consistent spacing
+
+Small functions
+
+No duplicated logic
+
+========================
+IMPORTANT
+========================
+
+Do NOT rewrite working code just because you can.
+
+Only refactor where it improves readability, maintainability, or reusability.
+
+Preserve my existing machine learning pipeline.
+
+If you find repeated code, convert it into reusable functions.
+
+Before changing a section, explain:
+
+1. Why it should be changed.
+
+2. What the improvement is.
+
+3. Whether the logic changes.
+
+If the logic changes, explain why.
+
+At the end, the notebook should look like something that would be submitted as a professional machine learning project and should be immediately usable inside a Streamlit application.
+One of the previous versions of this project developed duplicate fixtures and inconsistent feature generation during the knockout stages because dataframes were repeatedly appended and modified.
+
+When refactoring, carefully inspect every function that appends rows, recalculates Elo ratings, or engineers features.
+
+Ensure that:
+- fixtures are never duplicated,
+- feature engineering is performed exactly once per fixture,
+- Elo ratings are updated in the correct sequence,
+- prediction dataframes contain exactly one row per fixture,
+- inference uses the same feature pipeline as training.
+
+Do not introduce hidden state or repeated dataframe mutations.
+---------------------------------------------------------------------------------------------------------------------

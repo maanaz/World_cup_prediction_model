@@ -1,0 +1,41 @@
+1.
+
+All feature engineering loops.
+
+2.
+
+All knockout prediction cells.
+
+3.
+
+All dataframe creation.
+
+4.
+
+Model prediction functions.
+
+5.
+
+Updating Elo after each stage.
+
+6.
+
+Plot generation.
+
+7.
+
+Winner tables.
+
+Things that are already good
+
+These are worth keeping almost unchanged.
+
+✅ calculate_elo()
+✅ get_team_form()
+✅ get_h2h()
+✅ plot_match_probabilities()
+✅ country_colors
+✅ model training
+✅ feature list
+
+These are the backbone of the project.

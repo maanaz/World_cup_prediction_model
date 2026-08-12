@@ -1,0 +1,73 @@
+date,home_team,away_team,xgb_prediction,lr_prediction,rf_prediction
+2026-06-11,Mexico,South Africa,H,H,H
+2026-06-11,South Korea,Czech Republic,H,H,H
+2026-06-12,Canada,Bosnia and Herzegovina,H,H,H
+2026-06-12,United States,Paraguay,H,H,A
+2026-06-13,Qatar,Switzerland,A,A,A
+2026-06-13,Brazil,Morocco,H,A,H
+2026-06-13,Haiti,Scotland,A,A,A
+2026-06-13,Australia,Turkey,A,A,A
+2026-06-14,Germany,Curaçao,H,H,H
+2026-06-14,Ivory Coast,Ecuador,A,A,A
+2026-06-14,Netherlands,Japan,A,A,D
+2026-06-14,Sweden,Tunisia,H,H,H
+2026-06-15,Belgium,Egypt,H,H,H
+2026-06-15,Iran,New Zealand,H,H,H
+2026-06-15,Spain,Cape Verde,H,H,H
+2026-06-15,Saudi Arabia,Uruguay,A,A,A
+2026-06-16,France,Senegal,H,H,H
+2026-06-16,Iraq,Norway,A,A,A
+2026-06-16,Argentina,Algeria,H,H,H
+2026-06-16,Austria,Jordan,H,H,H
+2026-06-17,Portugal,DR Congo,H,H,H
+2026-06-17,Uzbekistan,Colombia,A,A,A
+2026-06-17,England,Croatia,H,H,H
+2026-06-17,Ghana,Panama,A,A,A
+2026-06-18,Czech Republic,South Africa,H,H,H
+2026-06-18,Mexico,South Korea,H,H,H
+2026-06-18,Switzerland,Bosnia and Herzegovina,H,H,H
+2026-06-18,Canada,Qatar,H,H,H
+2026-06-19,Scotland,Morocco,A,A,A
+2026-06-19,Brazil,Haiti,H,H,H
+2026-06-19,United States,Australia,H,H,H
+2026-06-19,Turkey,Paraguay,H,H,H
+2026-06-20,Germany,Ivory Coast,H,H,H
+2026-06-20,Ecuador,Curaçao,H,H,H
+2026-06-20,Netherlands,Sweden,H,H,H
+2026-06-20,Tunisia,Japan,A,A,A
+2026-06-21,Belgium,Iran,H,H,H
+2026-06-21,New Zealand,Egypt,A,A,A
+2026-06-21,Spain,Saudi Arabia,H,H,H
+2026-06-21,Uruguay,Cape Verde,H,H,H
+2026-06-22,France,Iraq,H,H,H
+2026-06-22,Norway,Senegal,H,H,H
+2026-06-22,Argentina,Austria,H,H,H
+2026-06-22,Jordan,Algeria,A,A,A
+2026-06-23,Portugal,Uzbekistan,H,H,H
+2026-06-23,Colombia,DR Congo,H,H,H
+2026-06-23,England,Ghana,H,H,H
+2026-06-23,Panama,Croatia,A,A,A
+2026-06-24,Mexico,Czech Republic,H,H,H
+2026-06-24,South Africa,South Korea,A,A,A
+2026-06-24,Canada,Switzerland,H,H,A
+2026-06-24,Bosnia and Herzegovina,Qatar,H,H,H
+2026-06-24,Scotland,Brazil,A,A,A
+2026-06-24,Morocco,Haiti,H,H,H
+2026-06-25,United States,Turkey,H,H,D
+2026-06-25,Paraguay,Australia,A,A,A
+2026-06-25,Curaçao,Ivory Coast,A,A,A
+2026-06-25,Ecuador,Germany,A,A,A
+2026-06-25,Japan,Sweden,H,H,H
+2026-06-25,Tunisia,Netherlands,A,A,A
+2026-06-26,Egypt,Iran,A,A,A
+2026-06-26,New Zealand,Belgium,A,A,A
+2026-06-26,Cape Verde,Saudi Arabia,A,A,A
+2026-06-26,Uruguay,Spain,A,A,A
+2026-06-26,Norway,France,A,A,A
+2026-06-26,Senegal,Iraq,H,H,H
+2026-06-27,Algeria,Austria,H,H,A
+2026-06-27,Jordan,Argentina,A,A,A
+2026-06-27,Colombia,Portugal,H,A,H
+2026-06-27,DR Congo,Uzbekistan,A,A,A
+2026-06-27,Panama,England,A,A,A
+2026-06-27,Croatia,Ghana,H,H,H

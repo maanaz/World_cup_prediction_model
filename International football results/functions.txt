@@ -1,0 +1,2278 @@
+
+
+Pasted code(20260811-081305).py
+Python
+Act as a professional data scientist who has mastered machine learning in last 25 years, especially in sports data, and give a closer look at the notebook. Actually, it is, I was refactoring the old notebook which was messy, and currently it has some issues with ELO calculation. And I think the last lines that I did with historical DF is making a mess. I want a new perspective in this actually, and I need to continue refactoring. If you want, I can give you the real notebook that actually predicted well. Actually predicted the winner is Spain in the World Cup, and which was correct. And that, but I had to go to another level also to do score prediction. While doing score prediction, and I have been doing score prediction till, score prediction from the group stage now in the refactoring. So, but still, in the result prediction, I have to, the problem is after predicting the results, we just have to predict the results, and then we have to check with the actual results, and just check the accuracy, accuracy of group stage prediction. And then after that, we have to add the actual results and calculate the new ELO rating and calculate the goal difference, away goal difference rate and all that, the head-to-head features, everything. Actually we have also, actually there are notebooks, there are also functions we have already created. And I am confused how to use them all in this notebook and be a better version of it. And we have to also implement streamlit on it. That's why I am more focusing on functions that we don't have to do everything again and again.
+
+Yes. I went through the uploaded refactored notebook closely, and I think the main problem is not that your individual functions are bad. The problem is that the notebook currently has two different data pipelines mixed together.
+
+The biggest issue is exactly what you suspected: the historical_df handling near the middle/end is making the state of the model unclear.
+
+For example, you first build historical_df from the original match data, remove the future 2026 World Cup matches, and prepare it for feature engineering. 
+
+
+Then later you completely replace it with:
+
+historical_df = pd.read_csv("historical_features.csv")
+
+
+And then, much later, you do:
+
+historical_df = pd.concat([historical_df, actual_results], ignore_index=True)
+historical_df, updated_elo = calculate_elo(historical_df)
+
+
+That is the part I would change first.
+
+The perspective I want you to use
+Your notebook should be thought of as four separate things:
+
+1. RAW MATCH DATA
+        ↓
+2. HISTORICAL FEATURE DATA
+        ↓
+3. MODEL TRAINING
+        ↓
+4. TOURNAMENT PREDICTION ENGINE
+        ↓
+   predict → evaluate → update state
+The crucial concept is:
+
+ELO, form, H2H, etc. are STATE. They should be updated only after a match has actually happened.
+
+Your prediction model should never need to "rebuild history" every time you want to predict another round.
+
+What is currently wrong
+1. historical_df has too many meanings
+At different points, historical_df means:
+
+First
+Raw historical matches:
+
+historical_df = df[df['home_score'].notna()].copy()
+Then:
+
+Later
+A completely different dataset:
+
+historical_df = pd.read_csv("historical_features.csv")
+Then:
+
+Finally
+Historical feature data + actual World Cup results:
+
+historical_df = pd.concat([historical_df, actual_results])
+That's dangerous.
+
+You can't easily know:
+
+"What exactly is the state of my historical data at this point?"
+
+2. This line makes the previous work irrelevant
+You have:
+
+historical_df['tournament_weight'] = ...
+and immediately afterwards:
+
+historical_df = pd.read_csv("historical_features.csv")
+So the dataframe you just modified is discarded.
+
+
+
+That entire first historical_df preparation section should eventually disappear from this stage of the notebook.
+
+3. Your ELO state is coming from a different pipeline
+You load:
+
+elo_df = pd.read_csv("final_elo.csv")
+
+final_elo = dict(
+    zip(
+        elo_df["team"],
+        elo_df["elo"]
+    )
+)
+
+
+Then your feature engineering uses:
+
+fixtures["elo_home"] = (
+    fixtures["home_team"]
+    .map(current_elo)
+    .fillna(1000)
+)
+
+
+So your prediction pipeline is essentially saying:
+
+Use ELO from final_elo.csv
++
+Use form/H2H from historical_features.csv
++
+Use model trained on historical_features.csv
+That's okay if those files were generated from exactly the same historical state and methodology.
+
+But then at the end you do:
+
+calculate_elo(historical_df)
+and create a new ELO state from a different dataframe.
+
+That's where the two pipelines diverge.
+
+4. Your calculate_elo() isn't actually using tournament weight
+You created:
+
+tournament_weight = {
+    "FIFA World Cup": 5,
+    "FIFA World Cup qualification": 3,
+    ...
+}
+But calculate_elo() only uses:
+
+k_adjusted = k
+or:
+
+k_adjusted = k * 1.25
+or:
+
+k_adjusted = k * 1.5
+
+
+So currently:
+
+World Cup match
+Friendly
+Euro
+Qualification
+do not have different ELO K factors.
+
+Your tournament_weight is being used as a machine-learning feature, but not in ELO calculation.
+
+That's not necessarily wrong. But it needs to be intentional.
+
+5. Your ELO calculation itself is stateful — which is good
+This part is actually structured reasonably:
+
+home_elo = elo.get(home, initial)
+away_elo = elo.get(away, initial)
+
+elo_home.append(home_elo)
+elo_away.append(away_elo)
+then:
+
+elo[home] = ...
+elo[away] = ...
+
+
+This means the function naturally processes:
+
+Match 1
+   ↓
+update ELO
+
+Match 2
+   ↓
+update ELO
+
+Match 3
+   ↓
+update ELO
+That's exactly what we want.
+
+Don't throw this function away.
+
+Instead, we should make the rest of the notebook respect this stateful design.
+
+The architecture I recommend
+I would restructure the notebook around these datasets:
+
+raw_matches
+historical_matches
+historical_features
+upcoming_fixtures
+predictions
+actual_results
+And separately:
+
+current_elo
+Think of current_elo as the model's memory.
+
+The tournament workflow should become this
+For the 2026 World Cup:
+
+                 HISTORICAL DATA
+                       │
+                       ▼
+              feature engineering
+                       │
+                       ▼
+                 train models
+                       │
+                       ▼
+              PRE-TOURNAMENT STATE
+              ┌──────────────────┐
+              │ current_elo      │
+              │ team form        │
+              │ H2H              │
+              └──────────────────┘
+                       │
+                       ▼
+             predict group stage
+                       │
+                       ▼
+              actual group results
+                       │
+                       ▼
+                 evaluate
+                       │
+                       ▼
+             UPDATE TOURNAMENT STATE
+                       │
+                       ▼
+             calculate new ELO
+                       │
+                       ▼
+            calculate new form/H2H
+                       │
+                       ▼
+             predict knockout round
+                       │
+                       ▼
+                    actual
+                       │
+                       ▼
+                   update
+                       │
+                       ▼
+                  next round
+This is the key change.
+
+And your functions already give us most of this
+You already have:
+
+calculate_elo()
+get_team_form()
+get_h2h()
+add_team_form_features()
+add_h2h_features()
+engineer_prediction_features()
+train_models()
+evaluate_models()
+predict_matches()
+check_predictions()
+You don't need another 20 functions.
+
+You need to connect these functions properly.
+
+I would organize the notebook into 7 sections
+1. Configuration
+Only things like:
+
+DATA_PATH = ...
+MODEL_PATH = ...
+
+INITIAL_ELO = 1000
+ELO_K = 32
+FORM_WINDOW = 10
+H2H_YEARS = 5
+and:
+
+tournament_weight = {...}
+2. Data loading
+Only:
+
+raw_matches = pd.read_csv(...)
+Then cleaning.
+
+Never call this dataframe historical_df yet.
+
+3. Historical state creation
+Here we generate:
+
+historical_matches
+current_elo
+For example:
+
+historical_matches = raw_matches[
+    raw_matches["date"] < "2026-06-11"
+].copy()
+Then:
+
+historical_matches, current_elo = calculate_elo(
+    historical_matches
+)
+Now we have:
+
+historical_matches
+current_elo
+That is our pre-World-Cup state.
+
+4. Historical feature dataset
+Your:
+
+historical_features.csv
+can still exist.
+
+But call it what it actually is:
+
+training_data
+rather than:
+
+historical_df
+Because it isn't simply "historical matches".
+
+It is:
+
+historical matches + engineered ML features.
+
+That's an important distinction.
+
+So:
+
+training_data = pd.read_csv("historical_features.csv")
+Then:
+
+X = training_data[features]
+y = training_data["result"]
+5. Model training
+Your current:
+
+train_models()
+and:
+
+evaluate_models()
+can remain almost exactly as they are.
+
+That's already reasonably modular.
+
+Then save:
+
+models/
+    logistic_model.pkl
+    random_forest_model.pkl
+    xgboost_model.pkl
+    result_scaler.pkl
+You already do this. 
+
+
+6. Tournament engine
+This is where I think your refactoring should really improve.
+
+Instead of:
+
+group_stage_predictions = ...
+and then manually concatenating things later, make the process:
+
+group_stage_features = engineer_prediction_features(
+    group_stage_fixtures,
+    historical_matches,
+    current_elo
+)
+then:
+
+group_stage_predictions = predict_matches(
+    models,
+    group_stage_features,
+    features,
+    scaler
+)
+Then:
+
+check_predictions(
+    group_stage_predictions,
+    actual_results
+)
+Then update state.
+
+7. Update state
+This is the most important missing conceptual layer.
+
+After the actual matches happen:
+
+historical_matches = pd.concat(
+    [historical_matches, actual_results],
+    ignore_index=True
+)
+
+historical_matches = historical_matches.sort_values("date")
+Then:
+
+historical_matches, current_elo = calculate_elo(
+    historical_matches
+)
+But ideally we eventually make this cleaner so that we don't recalculate the entire history every time.
+
+For now, however, recalculating is perfectly acceptable for your project.
+
+It's only 100k-ish football matches at most, and you're doing it offline. Correctness is more important than premature optimization.
+
+One very important distinction
+There are actually two different things you are doing.
+
+Model training
+2000 → 2022
+       ↓
+features
+       ↓
+ML model
+This is for learning.
+
+Tournament prediction
+Pre-2026 state
+       ↓
+2026 match prediction
+       ↓
+actual result
+       ↓
+state update
+       ↓
+next prediction
+This is for simulation/prediction.
+
+Do not mix these two pipelines.
+
+Your current code mixes them here
+This:
+
+historical_df = pd.concat([historical_df, actual_results])
+looks innocent.
+
+But conceptually it is mixing:
+
+training data
+with:
+
+live tournament state
+Those should be separate.
+
+I'd eventually want this
+Something like:
+
+# PRE-TOURNAMENT
+historical_matches = load_historical_matches()
+current_elo = calculate_current_elo(historical_matches)
+
+training_data = load_training_features()
+
+models, scaler = train_result_models(training_data)
+
+
+# GROUP STAGE
+group_features = engineer_prediction_features(
+    group_fixtures,
+    historical_matches,
+    current_elo
+)
+
+group_predictions = predict_matches(
+    models,
+    group_features,
+    features,
+    scaler
+)
+
+evaluate_predictions(
+    group_predictions,
+    group_actual_results
+)
+
+
+# UPDATE STATE
+historical_matches = update_history(
+    historical_matches,
+    group_actual_results
+)
+
+historical_matches, current_elo = calculate_elo(
+    historical_matches
+)
+
+
+# KNOCKOUT
+knockout_features = engineer_prediction_features(
+    knockout_fixtures,
+    historical_matches,
+    current_elo
+)
+
+knockout_predictions = predict_matches(...)
+That is much closer to a real production-style pipeline.
+
+And this is perfect for Streamlit
+Because Streamlit shouldn't contain your actual ML logic.
+
+It should basically do:
+
+User selects:
+Spain
+vs
+Brazil
+
+        ↓
+
+prediction function
+
+        ↓
+
+features
+
+        ↓
+
+model
+
+        ↓
+
+probabilities
+
+        ↓
+
+UI
+For example:
+
+predict_single_match(
+    "Spain",
+    "Brazil",
+    current_elo,
+    historical_matches,
+    models,
+    scaler
+)
+Then Streamlit just displays:
+
+Spain 🇪🇸 vs Brazil 🇧🇷
+
+Spain       57.2%
+Draw        24.1%
+Brazil      18.7%
+
+Prediction: Spain
+That's why you're right to focus on functions now rather than writing everything repeatedly in notebook cells.
+
+One thing I DON'T want to change yet
+You mentioned that the old notebook predicted Spain as the World Cup winner correctly.
+
+That's extremely important.
+
+I don't want to look at this refactored notebook and blindly "improve" the ELO formula.
+
+Because if the old notebook produced the good result, we should first determine:
+
+OLD NOTEBOOK
+     ↓
+What exact ELO methodology?
+What exact historical period?
+What exact feature generation?
+What exact leakage prevention?
+What exact model?
+What exact tournament state?
+     ↓
+CURRENT REFACTORED NOTEBOOK
+     ↓
+Where did behavior change?
+That's much safer than rewriting your ELO based on generic best practices.
+
+So my recommendation for the next step
+Yes — give me the old notebook that actually predicted Spain correctly.
+
+Then I can do a proper old vs refactored audit, specifically:
+
+Compare the old ELO calculation with the new one.
+
+Find exactly where final_elo was generated.
+
+Compare historical feature generation.
+
+Check whether the current notebook accidentally introduced leakage.
+
+Identify which functions from the old notebook should survive.
+
+Remove duplicated/obsolete cells.
+
+Design the clean prediction → evaluation → update → next-round pipeline.
+
+Keep the working logic intact while refactoring it.
+
+Structure the functions so the same engine can later be called by Streamlit.
+
+I would not start rewriting the ELO function yet. The better move is to compare the known-good notebook against this one first. That will tell us whether your current ELO problem is actually an ELO formula problem or a data/state-management problem.
+
+And from this notebook alone, my strongest suspicion is state/data management, especially the multiple meanings of historical_df, rather than the basic ELO mathematics.
+
+
+can u collect all the functions defined in my note bbok and give it as a txt file so that i can refer and use it properly
+
+Done. I extracted all 15 functions defined in your notebook, kept in their original order and code form without changing their logic.
+
+
+This includes the ELO, form, H2H, feature engineering, model training/evaluation, prediction, group-stage evaluation, and plotting functions. 
+
+
+
+world_cup_notebook_functions.txt
+
+
+WORLD CUP PREDICTION NOTEBOOK — EXTRACTED FUNCTIONS
+=======================================================
+
+Source: Pasted code(20260811-081305).py
+
+This file contains the functions defined in the uploaded notebook,
+kept in their original order and code form for reference.
+
+Functions included:
+1. calculate_elo
+2. get_team_form
+3. get_h2h
+4. add_team_form_features
+5. add_h2h_features
+6. engineer_prediction_features
+7. train_models
+8. evaluate_models
+9. predict_matches
+10. check_predictions
+11. group_stage_plot_probs
+12. single_match_probs
+13. plot_single_match_probs
+14. prepare_round_features
+
+Note: This is an extraction/reference file. No functions were redesigned
+or corrected here.
+
+
+def get_result(row):
+    if row['home_score']>row['away_score']:
+        return "H"#home
+    elif row['home_score']<row['away_score']:
+        return "A"#away
+    else:
+        return "D"#draw
+
+def calculate_elo(df, k=32, initial=1000):
+
+    elo = {}
+    elo_home = []
+    elo_away = []
+
+    for _, row in df.iterrows():
+
+        home = row["home_team"]
+        away = row["away_team"]
+
+        home_elo = elo.get(home, initial)
+        away_elo = elo.get(away, initial)
+
+        elo_home.append(home_elo)
+        elo_away.append(away_elo)
+
+        # Expected scores
+        expected_home = 1 / (1 + 10 ** ((away_elo - home_elo) / 400))
+        expected_away = 1 - expected_home
+
+        # Detect penalty shootout
+        is_penalty = (
+            row["home_score"] == row["away_score"] and
+            row["result"] != "D"
+        )
+
+        # Actual scores
+        if row["result"] == "H":
+
+            if is_penalty:
+                actual_home, actual_away = 0.75, 0.25
+            else:
+                actual_home, actual_away = 1.0, 0.0
+
+        elif row["result"] == "A":
+
+            if is_penalty:
+                actual_home, actual_away = 0.25, 0.75
+            else:
+                actual_home, actual_away = 0.0, 1.0
+
+        else:
+            actual_home, actual_away = 0.5, 0.5
+
+        # Goal difference multiplier
+        goal_diff = abs(row["home_score"] - row["away_score"])
+
+        if goal_diff == 1:
+            k_adjusted = k
+        elif goal_diff == 2:
+            k_adjusted = k * 1.25
+        else:
+            k_adjusted = k * 1.5
+
+        # Update Elo ratings
+        elo[home] = home_elo + k_adjusted * (actual_home - expected_home)
+        elo[away] = away_elo + k_adjusted * (actual_away - expected_away)
+
+    df["elo_home"] = elo_home
+    df["elo_away"] = elo_away
+
+    return df, elo
+
+def get_team_form(team, date, df, n=10):
+
+    past = df[
+        (
+            (df['home_team'] == team) |
+            (df['away_team'] == team)
+        ) &
+        (df['date'] < date)
+    ].tail(n)
+
+    if len(past) == 0:
+        return 0, 0, 0, 0, 0
+
+    goal_scored = []
+    goal_conceded = []
+    goal_difference = []
+    wins = []
+    draws = []
+
+    for _, row in past.iterrows():
+
+        if row['home_team'] == team:
+
+            scored = row['home_score']
+            conceded = row['away_score']
+
+            goal_scored.append(scored)
+            goal_conceded.append(conceded)
+            goal_difference.append(scored - conceded)
+
+            wins.append(1 if row['result'] == 'H' else 0)
+            draws.append(1 if row['result'] == 'D' else 0)
+
+        else:
+
+            scored = row['away_score']
+            conceded = row['home_score']
+
+            goal_scored.append(scored)
+            goal_conceded.append(conceded)
+            goal_difference.append(scored - conceded)
+
+            wins.append(1 if row['result'] == 'A' else 0)
+            draws.append(1 if row['result'] == 'D' else 0)
+
+    return (
+        round(np.mean(goal_scored), 2),
+        round(np.mean(goal_conceded), 2),
+        round(np.mean(goal_difference), 2),
+        round(np.mean(wins), 2),
+        round(np.mean(draws), 2)
+    )
+
+def get_h2h(home_team, away_team, date, df):
+    c1 = (df['home_team']==home_team) & (df['away_team']==away_team)
+    c2 = (df['home_team']==away_team) & (df['away_team']==home_team)
+    five_years_ago = date - pd.DateOffset(years=5)
+    past = df[(c1 | c2) & (df['date'] < date) & (df['date'] >= five_years_ago)]
+    
+    if len(past)==0:
+        return 0, 0, 0
+    home_wins=0
+    away_wins=0
+    draws=0
+    for _,row in past.iterrows():
+        if row['result']=="D":
+            draws+=1
+        elif row["result"]=="H":
+            if row["home_team"]==home_team:
+                home_wins+=1
+            else:
+                away_wins+=1
+        elif row["result"]=="A":
+            if row["away_team"]==home_team:
+                home_wins+=1
+            else:
+                away_wins+=1
+    
+
+    
+    return home_wins, away_wins, draws
+
+def add_team_form_features(fixtures, reference_df):
+
+    home_scored = []
+    home_conceded = []
+    home_goal_diff = []
+    home_win_rate = []
+    home_draw_rate = []
+
+    away_scored = []
+    away_conceded = []
+    away_goal_diff = []
+    away_win_rate = []
+    away_draw_rate = []
+
+    for _, row in fixtures.iterrows():
+
+        hs, hc, hgd, hw, hd = get_team_form(
+            row["home_team"],
+            row["date"],
+            reference_df
+        )
+
+        as_, ac, agd, aw, ad = get_team_form(
+            row["away_team"],
+            row["date"],
+            reference_df
+        )
+
+        home_scored.append(hs)
+        home_conceded.append(hc)
+        home_goal_diff.append(hgd)
+        home_win_rate.append(hw)
+        home_draw_rate.append(hd)
+
+        away_scored.append(as_)
+        away_conceded.append(ac)
+        away_goal_diff.append(agd)
+        away_win_rate.append(aw)
+        away_draw_rate.append(ad)
+
+    fixtures["home_scored"] = home_scored
+    fixtures["home_conceded"] = home_conceded
+    fixtures["home_goal_diff"] = home_goal_diff
+    fixtures["home_win_rate"] = home_win_rate
+    fixtures["home_draw_rate"] = home_draw_rate
+
+    fixtures["away_scored"] = away_scored
+    fixtures["away_conceded"] = away_conceded
+    fixtures["away_goal_diff"] = away_goal_diff
+    fixtures["away_win_rate"] = away_win_rate
+    fixtures["away_draw_rate"] = away_draw_rate
+
+    return fixtures
+
+def add_h2h_features(fixtures, reference_df):
+    fixtures = fixtures.copy()
+
+    h2h_home_wins = []
+    h2h_away_wins = []
+    h2h_draws = []
+
+    for _, row in fixtures.iterrows():
+
+        home_wins, away_wins, draws = get_h2h(
+            row["home_team"],
+            row["away_team"],
+            row["date"],
+            reference_df
+        )
+
+        h2h_home_wins.append(home_wins)
+        h2h_away_wins.append(away_wins)
+        h2h_draws.append(draws)
+
+    fixtures["h2h_home_wins"] = h2h_home_wins
+    fixtures["h2h_away_wins"] = h2h_away_wins
+    fixtures["h2h_draws"] = h2h_draws
+
+    return fixtures
+
+def engineer_prediction_features(
+    fixtures,
+    reference_df,
+    current_elo
+):
+    fixtures = fixtures.copy()
+
+    fixtures = add_team_form_features(
+        fixtures,
+        reference_df
+    )
+
+    fixtures = add_h2h_features(
+        fixtures,
+        reference_df
+    )
+
+    fixtures["neutral"] = fixtures["neutral"].astype(int)
+
+    fixtures["tournament_weight"] = (
+        fixtures["tournament"]
+        .map(tournament_weight)
+        .fillna(2)
+    )
+
+    fixtures["elo_home"] = (
+        fixtures["home_team"]
+        .map(current_elo)
+        .fillna(1000)
+    )
+
+    fixtures["elo_away"] = (
+        fixtures["away_team"]
+        .map(current_elo)
+        .fillna(1000)
+    )
+
+    fixtures["elo_diff"] = (
+        fixtures["elo_home"]
+        - fixtures["elo_away"]
+    )
+
+    return fixtures
+
+def train_models(
+    X_train,
+    X_train_scaled,
+    y_train
+):
+    models = {}
+
+    # Logistic Regression
+    logistic_model = LogisticRegression(
+        max_iter=1000
+    )
+
+    logistic_model.fit(
+        X_train_scaled,
+        y_train
+    )
+
+    models["Logistic Regression"] = logistic_model
+
+    # Random Forest
+    random_forest_model = RandomForestClassifier(
+        n_estimators=100,
+        random_state=42
+    )
+
+    random_forest_model.fit(
+        X_train,
+        y_train
+    )
+
+    models["Random Forest"] = random_forest_model
+
+    # XGBoost
+    xgb_model = XGBClassifier(
+        n_estimators=100,
+        random_state=42,
+        eval_metric="mlogloss"
+    )
+
+    label_mapping = {
+        "A": 0,
+        "D": 1,
+        "H": 2
+    }
+
+    y_train_xgb = y_train.map(label_mapping)
+
+    xgb_model.fit(
+        X_train,
+        y_train_xgb
+    )
+
+    models["XGBoost"] = xgb_model
+
+    return models
+
+def evaluate_models(
+    models,
+    X_test,
+    X_test_scaled,
+    y_test
+):
+    results = []
+
+    # Logistic Regression
+    lr_predictions = models["Logistic Regression"].predict(
+        X_test_scaled
+    )
+
+    results.append({
+        "model": "Logistic Regression",
+        "accuracy": accuracy_score(
+            y_test,
+            lr_predictions
+        )
+    })
+
+    # Random Forest
+    rf_predictions = models["Random Forest"].predict(
+        X_test
+    )
+
+    results.append({
+        "model": "Random Forest",
+        "accuracy": accuracy_score(
+            y_test,
+            rf_predictions
+        )
+    })
+
+    # XGBoost
+    xgb_predictions = models["XGBoost"].predict(
+        X_test
+    )
+
+    xgb_mapping = {
+        0: "A",
+        1: "D",
+        2: "H"
+    }
+
+    xgb_predictions = pd.Series(
+        xgb_predictions
+    ).map(xgb_mapping)
+
+    results.append({
+        "model": "XGBoost",
+        "accuracy": accuracy_score(
+            y_test,
+            xgb_predictions
+        )
+    })
+
+    return pd.DataFrame(results)
+
+def predict_matches(
+    models,
+    fixtures,
+    features,
+    scaler
+):
+    fixtures = fixtures.copy()
+
+    X = fixtures[features]
+
+    # Logistic Regression
+    X_scaled = scaler.transform(X)
+
+    lr_predictions = models["Logistic Regression"].predict(X_scaled)
+    lr_probs = models["Logistic Regression"].predict_proba(X_scaled)
+
+    # Random Forest
+    rf_predictions = models["Random Forest"].predict(X)
+    rf_probs = models["Random Forest"].predict_proba(X)
+
+    # XGBoost
+    xgb_predictions = models["XGBoost"].predict(X)
+    xgb_probs = models["XGBoost"].predict_proba(X)
+
+    # XGBoost labels
+    xgb_mapping = {
+        0: "A",
+        1: "D",
+        2: "H"
+    }
+
+    xgb_predictions = pd.Series(
+        xgb_predictions
+    ).map(xgb_mapping).values
+
+    # Store predictions
+    fixtures["lr_prediction"] = lr_predictions
+    fixtures["rf_prediction"] = rf_predictions
+    fixtures["xgb_prediction"] = xgb_predictions
+
+    # Store probabilities
+    fixtures["lr_prob_A"] = lr_probs[:, 0]
+    fixtures["lr_prob_D"] = lr_probs[:, 1]
+    fixtures["lr_prob_H"] = lr_probs[:, 2]
+
+    fixtures["rf_prob_A"] = rf_probs[:, 0]
+    fixtures["rf_prob_D"] = rf_probs[:, 1]
+    fixtures["rf_prob_H"] = rf_probs[:, 2]
+
+    fixtures["xgb_prob_A"] = xgb_probs[:, 0]
+    fixtures["xgb_prob_D"] = xgb_probs[:, 1]
+    fixtures["xgb_prob_H"] = xgb_probs[:, 2]
+
+    return fixtures
+
+def check_predictions(predictions_df, actual_results):
+
+    correct = {
+        "Logistic Regression": 0,
+        "Random Forest": 0,
+        "XGBoost": 0
+    }
+
+    total = 0
+
+    correct_predictions = {
+        "Logistic Regression": [],
+        "Random Forest": [],
+        "XGBoost": []
+    }
+
+    wrong_predictions = {
+        "Logistic Regression": [],
+        "Random Forest": [],
+        "XGBoost": []
+    }
+
+    def convert(result, row):
+
+        if result == "H":
+            return row["home_team"]
+
+        elif result == "A":
+            return row["away_team"]
+
+        else:
+            return "Draw"
+
+    def reverse_result(result):
+
+        if result == "H":
+            return "A"
+
+        elif result == "A":
+            return "H"
+
+        else:
+            return "D"
+
+    for _, row in predictions_df.iterrows():
+
+        home = row["home_team"]
+        away = row["away_team"]
+
+        # First try normal home/away order
+        actual_match = actual_results[
+            (actual_results["home_team"] == home) &
+            (actual_results["away_team"] == away)
+        ]
+
+        reversed_match = False
+
+        # If not found, try reversed home/away order
+        if actual_match.empty:
+
+            actual_match = actual_results[
+                (actual_results["home_team"] == away) &
+                (actual_results["away_team"] == home)
+            ]
+
+            reversed_match = True
+
+        # Skip only if the match cannot be found at all
+        if actual_match.empty:
+            continue
+
+        actual = actual_match.iloc[0]["actual_result"]
+
+        # If actual-results has the teams reversed,
+        # reverse H <-> A
+        if reversed_match:
+            actual = reverse_result(actual)
+
+        total += 1
+
+        predictions = {
+            "Logistic Regression": row["lr_prediction"],
+            "Random Forest": row["rf_prediction"],
+            "XGBoost": row["xgb_prediction"]
+        }
+
+        match_key = f"{home} vs {away}"
+
+        for model, predicted in predictions.items():
+
+            if actual == predicted:
+
+                correct[model] += 1
+
+                correct_predictions[model].append(
+                    f"{match_key}: "
+                    f"prediction: {convert(predicted, row)}, "
+                    f"actual: {convert(actual, row)}"
+                )
+
+            else:
+
+                wrong_predictions[model].append(
+                    f"{match_key}: "
+                    f"prediction: {convert(predicted, row)}, "
+                    f"actual: {convert(actual, row)}"
+                )
+
+    print(f"Total matches evaluated: {total}")
+
+    print("\nAccuracy:")
+
+    for model in correct:
+
+        accuracy = (correct[model] / total) * 100
+
+        print(
+            f"{model}: "
+            f"{correct[model]}/{total} "
+            f"({accuracy:.2f}%)"
+        )
+
+    print("\nCorrect Predictions:")
+
+    for model in correct_predictions:
+
+        print(f"\n--- {model} ---")
+
+        for prediction in correct_predictions[model]:
+            print(prediction)
+
+    return correct_predictions, wrong_predictions
+
+def group_stage_plot_probs(predictions_df, model="XGBoost"):
+
+    model_prefix = {
+        "Logistic Regression": "lr",
+        "Random Forest": "rf",
+        "XGBoost": "xgb"
+    }
+
+    prefix = model_prefix[model]
+
+    # Match names
+    matches = (
+        predictions_df["home_team"] 
+        + " vs " 
+        + predictions_df["away_team"]
+    )
+
+    # Probabilities
+    prob_A = predictions_df[f"{prefix}_prob_A"]
+    prob_D = predictions_df[f"{prefix}_prob_D"]
+    prob_H = predictions_df[f"{prefix}_prob_H"]
+
+    x = np.arange(len(matches))
+    width = 0.25
+
+    plt.figure(figsize=(22, 8))
+
+    plt.bar(
+        x - width,
+        prob_H,
+        width,
+        label="Home Win"
+    )
+
+    plt.bar(
+        x,
+        prob_D,
+        width,
+        label="Draw"
+    )
+
+    plt.bar(
+        x + width,
+        prob_A,
+        width,
+        label="Away Win"
+    )
+
+    plt.xlabel("Match")
+    plt.ylabel("Probability")
+    plt.title(f"{model} - World Cup Group Stage Result Predictions")
+
+    plt.xticks(
+        x,
+        matches,
+        rotation=90
+    )
+
+    plt.ylim(0, 1)
+
+    plt.legend()
+
+    plt.tight_layout()
+
+    plt.show()
+
+def single_match_probs(
+    predictions_df,
+    home_team,
+    away_team,
+    model="XGBoost"
+):
+
+    # Find the match
+    match = predictions_df[
+        (predictions_df["home_team"] == home_team) &
+        (predictions_df["away_team"] == away_team)
+    ]
+
+    if match.empty:
+        print(f"Match not found: {home_team} vs {away_team}")
+        return
+
+    row = match.iloc[0]
+
+    # Select probability columns
+    prefix = {
+        "Logistic Regression": "lr",
+        "Random Forest": "rf",
+        "XGBoost": "xgb"
+    }[model]
+
+    home_prob = row[f"{prefix}_prob_H"]
+    draw_prob = row[f"{prefix}_prob_D"]
+    away_prob = row[f"{prefix}_prob_A"]
+
+    prediction = row[f"{prefix}_prediction"]
+
+    # Convert prediction to readable result
+    if prediction == "H":
+        predicted_result = home_team
+    elif prediction == "A":
+        predicted_result = away_team
+    else:
+        predicted_result = "Draw"
+
+    print(f"\n{home_team} vs {away_team}")
+    print(f"Model: {model}")
+
+    print(f"\n{home_team} win : {home_prob * 100:.2f}%")
+    print(f"Draw          : {draw_prob * 100:.2f}%")
+    print(f"{away_team} win : {away_prob * 100:.2f}%")
+
+    print(f"\nPrediction: {predicted_result}")
+
+def plot_single_match_probs(
+    predictions_df,
+    home_team,
+    away_team,
+    model="XGBoost"
+):
+
+    model_prefix = {
+        "Logistic Regression": "lr",
+        "Random Forest": "rf",
+        "XGBoost": "xgb"
+    }
+
+    prefix = model_prefix[model]
+
+    # Find match
+    match = predictions_df[
+        (predictions_df["home_team"] == home_team) &
+        (predictions_df["away_team"] == away_team)
+    ]
+
+    if match.empty:
+        print(f"Match not found: {home_team} vs {away_team}")
+        return
+
+    match = match.iloc[0]
+
+    # Probabilities
+    home_prob = match[f"{prefix}_prob_H"]
+    draw_prob = match[f"{prefix}_prob_D"]
+    away_prob = match[f"{prefix}_prob_A"]
+
+    labels = [
+        home_team,
+        "Draw",
+        away_team
+    ]
+
+    probabilities = [
+        home_prob,
+        draw_prob,
+        away_prob
+    ]
+
+    # Country colors
+    colors = [
+        country_colors[home_team],
+        "gray",
+        country_colors[away_team]
+    ]
+
+    # Horizontal bar chart
+    plt.figure(figsize=(9, 4))
+
+    bars = plt.barh(
+        labels,
+        probabilities,
+        color=colors
+    )
+
+    # Percentage labels
+    for bar, probability in zip(bars, probabilities):
+
+        plt.text(
+            probability + 0.01,
+            bar.get_y() + bar.get_height() / 2,
+            f"{probability * 100:.1f}%",
+            va="center",
+            fontweight="bold"
+        )
+
+    plt.xlabel("Probability")
+
+    plt.title(
+        f"{home_team} vs {away_team} - {model}"
+    )
+
+    plt.xlim(0, 1)
+
+    plt.grid(
+        axis="x",
+        alpha=0.2
+    )
+
+    plt.tight_layout()
+
+    plt.show()
+
+def prepare_round_features(fixtures, reference_df, current_elo):
+    
+    # Make a copy so the original fixture dataframe isn't changed
+    fixtures = fixtures.copy()
+    
+    # Convert date to datetime
+    fixtures["date"] = pd.to_datetime(fixtures["date"])
+    
+    # Add tournament
+    fixtures["tournament"] = "FIFA World Cup"
+    
+    # Calculate all required features
+    round_features = engineer_prediction_features(
+        fixtures,
+        reference_df,
+        current_elo
+    )
+    
+    return round_features
+world_cup_notebook_functions.txt
+
+
+WORLD CUP PREDICTION NOTEBOOK — EXTRACTED FUNCTIONS
+=======================================================
+
+Source: Pasted code(20260811-081305).py
+
+This file contains the functions defined in the uploaded notebook,
+kept in their original order and code form for reference.
+
+Functions included:
+1. calculate_elo
+2. get_team_form
+3. get_h2h
+4. add_team_form_features
+5. add_h2h_features
+6. engineer_prediction_features
+7. train_models
+8. evaluate_models
+9. predict_matches
+10. check_predictions
+11. group_stage_plot_probs
+12. single_match_probs
+13. plot_single_match_probs
+14. prepare_round_features
+
+Note: This is an extraction/reference file. No functions were redesigned
+or corrected here.
+
+
+def get_result(row):
+    if row['home_score']>row['away_score']:
+        return "H"#home
+    elif row['home_score']<row['away_score']:
+        return "A"#away
+    else:
+        return "D"#draw
+
+def calculate_elo(df, k=32, initial=1000):
+
+    elo = {}
+    elo_home = []
+    elo_away = []
+
+    for _, row in df.iterrows():
+
+        home = row["home_team"]
+        away = row["away_team"]
+
+        home_elo = elo.get(home, initial)
+        away_elo = elo.get(away, initial)
+
+        elo_home.append(home_elo)
+        elo_away.append(away_elo)
+
+        # Expected scores
+        expected_home = 1 / (1 + 10 ** ((away_elo - home_elo) / 400))
+        expected_away = 1 - expected_home
+
+        # Detect penalty shootout
+        is_penalty = (
+            row["home_score"] == row["away_score"] and
+            row["result"] != "D"
+        )
+
+        # Actual scores
+        if row["result"] == "H":
+
+            if is_penalty:
+                actual_home, actual_away = 0.75, 0.25
+            else:
+                actual_home, actual_away = 1.0, 0.0
+
+        elif row["result"] == "A":
+
+            if is_penalty:
+                actual_home, actual_away = 0.25, 0.75
+            else:
+                actual_home, actual_away = 0.0, 1.0
+
+        else:
+            actual_home, actual_away = 0.5, 0.5
+
+        # Goal difference multiplier
+        goal_diff = abs(row["home_score"] - row["away_score"])
+
+        if goal_diff == 1:
+            k_adjusted = k
+        elif goal_diff == 2:
+            k_adjusted = k * 1.25
+        else:
+            k_adjusted = k * 1.5
+
+        # Update Elo ratings
+        elo[home] = home_elo + k_adjusted * (actual_home - expected_home)
+        elo[away] = away_elo + k_adjusted * (actual_away - expected_away)
+
+    df["elo_home"] = elo_home
+    df["elo_away"] = elo_away
+
+    return df, elo
+
+def get_team_form(team, date, df, n=10):
+
+    past = df[
+        (
+            (df['home_team'] == team) |
+            (df['away_team'] == team)
+        ) &
+        (df['date'] < date)
+    ].tail(n)
+
+    if len(past) == 0:
+        return 0, 0, 0, 0, 0
+
+    goal_scored = []
+    goal_conceded = []
+    goal_difference = []
+    wins = []
+    draws = []
+
+    for _, row in past.iterrows():
+
+        if row['home_team'] == team:
+
+            scored = row['home_score']
+            conceded = row['away_score']
+
+            goal_scored.append(scored)
+            goal_conceded.append(conceded)
+            goal_difference.append(scored - conceded)
+
+            wins.append(1 if row['result'] == 'H' else 0)
+            draws.append(1 if row['result'] == 'D' else 0)
+
+        else:
+
+            scored = row['away_score']
+            conceded = row['home_score']
+
+            goal_scored.append(scored)
+            goal_conceded.append(conceded)
+            goal_difference.append(scored - conceded)
+
+            wins.append(1 if row['result'] == 'A' else 0)
+            draws.append(1 if row['result'] == 'D' else 0)
+
+    return (
+        round(np.mean(goal_scored), 2),
+        round(np.mean(goal_conceded), 2),
+        round(np.mean(goal_difference), 2),
+        round(np.mean(wins), 2),
+        round(np.mean(draws), 2)
+    )
+
+def get_h2h(home_team, away_team, date, df):
+    c1 = (df['home_team']==home_team) & (df['away_team']==away_team)
+    c2 = (df['home_team']==away_team) & (df['away_team']==home_team)
+    five_years_ago = date - pd.DateOffset(years=5)
+    past = df[(c1 | c2) & (df['date'] < date) & (df['date'] >= five_years_ago)]
+    
+    if len(past)==0:
+        return 0, 0, 0
+    home_wins=0
+    away_wins=0
+    draws=0
+    for _,row in past.iterrows():
+        if row['result']=="D":
+            draws+=1
+        elif row["result"]=="H":
+            if row["home_team"]==home_team:
+                home_wins+=1
+            else:
+                away_wins+=1
+        elif row["result"]=="A":
+            if row["away_team"]==home_team:
+                home_wins+=1
+            else:
+                away_wins+=1
+    
+
+    
+    return home_wins, away_wins, draws
+
+def add_team_form_features(fixtures, reference_df):
+
+    home_scored = []
+    home_conceded = []
+    home_goal_diff = []
+    home_win_rate = []
+    home_draw_rate = []
+
+    away_scored = []
+    away_conceded = []
+    away_goal_diff = []
+    away_win_rate = []
+    away_draw_rate = []
+
+    for _, row in fixtures.iterrows():
+
+        hs, hc, hgd, hw, hd = get_team_form(
+            row["home_team"],
+            row["date"],
+            reference_df
+        )
+
+        as_, ac, agd, aw, ad = get_team_form(
+            row["away_team"],
+            row["date"],
+            reference_df
+        )
+
+        home_scored.append(hs)
+        home_conceded.append(hc)
+        home_goal_diff.append(hgd)
+        home_win_rate.append(hw)
+        home_draw_rate.append(hd)
+
+        away_scored.append(as_)
+        away_conceded.append(ac)
+        away_goal_diff.append(agd)
+        away_win_rate.append(aw)
+        away_draw_rate.append(ad)
+
+    fixtures["home_scored"] = home_scored
+    fixtures["home_conceded"] = home_conceded
+    fixtures["home_goal_diff"] = home_goal_diff
+    fixtures["home_win_rate"] = home_win_rate
+    fixtures["home_draw_rate"] = home_draw_rate
+
+    fixtures["away_scored"] = away_scored
+    fixtures["away_conceded"] = away_conceded
+    fixtures["away_goal_diff"] = away_goal_diff
+    fixtures["away_win_rate"] = away_win_rate
+    fixtures["away_draw_rate"] = away_draw_rate
+
+    return fixtures
+
+def add_h2h_features(fixtures, reference_df):
+    fixtures = fixtures.copy()
+
+    h2h_home_wins = []
+    h2h_away_wins = []
+    h2h_draws = []
+
+    for _, row in fixtures.iterrows():
+
+        home_wins, away_wins, draws = get_h2h(
+            row["home_team"],
+            row["away_team"],
+            row["date"],
+            reference_df
+        )
+
+        h2h_home_wins.append(home_wins)
+        h2h_away_wins.append(away_wins)
+        h2h_draws.append(draws)
+
+    fixtures["h2h_home_wins"] = h2h_home_wins
+    fixtures["h2h_away_wins"] = h2h_away_wins
+    fixtures["h2h_draws"] = h2h_draws
+
+    return fixtures
+
+def engineer_prediction_features(
+    fixtures,
+    reference_df,
+    current_elo
+):
+    fixtures = fixtures.copy()
+
+    fixtures = add_team_form_features(
+        fixtures,
+        reference_df
+    )
+
+    fixtures = add_h2h_features(
+        fixtures,
+        reference_df
+    )
+
+    fixtures["neutral"] = fixtures["neutral"].astype(int)
+
+    fixtures["tournament_weight"] = (
+        fixtures["tournament"]
+        .map(tournament_weight)
+        .fillna(2)
+    )
+
+    fixtures["elo_home"] = (
+        fixtures["home_team"]
+        .map(current_elo)
+        .fillna(1000)
+    )
+
+    fixtures["elo_away"] = (
+        fixtures["away_team"]
+        .map(current_elo)
+        .fillna(1000)
+    )
+
+    fixtures["elo_diff"] = (
+        fixtures["elo_home"]
+        - fixtures["elo_away"]
+    )
+
+    return fixtures
+
+def train_models(
+    X_train,
+    X_train_scaled,
+    y_train
+):
+    models = {}
+
+    # Logistic Regression
+    logistic_model = LogisticRegression(
+        max_iter=1000
+    )
+
+    logistic_model.fit(
+        X_train_scaled,
+        y_train
+    )
+
+    models["Logistic Regression"] = logistic_model
+
+    # Random Forest
+    random_forest_model = RandomForestClassifier(
+        n_estimators=100,
+        random_state=42
+    )
+
+    random_forest_model.fit(
+        X_train,
+        y_train
+    )
+
+    models["Random Forest"] = random_forest_model
+
+    # XGBoost
+    xgb_model = XGBClassifier(
+        n_estimators=100,
+        random_state=42,
+        eval_metric="mlogloss"
+    )
+
+    label_mapping = {
+        "A": 0,
+        "D": 1,
+        "H": 2
+    }
+
+    y_train_xgb = y_train.map(label_mapping)
+
+    xgb_model.fit(
+        X_train,
+        y_train_xgb
+    )
+
+    models["XGBoost"] = xgb_model
+
+    return models
+
+def evaluate_models(
+    models,
+    X_test,
+    X_test_scaled,
+    y_test
+):
+    results = []
+
+    # Logistic Regression
+    lr_predictions = models["Logistic Regression"].predict(
+        X_test_scaled
+    )
+
+    results.append({
+        "model": "Logistic Regression",
+        "accuracy": accuracy_score(
+            y_test,
+            lr_predictions
+        )
+    })
+
+    # Random Forest
+    rf_predictions = models["Random Forest"].predict(
+        X_test
+    )
+
+    results.append({
+        "model": "Random Forest",
+        "accuracy": accuracy_score(
+            y_test,
+            rf_predictions
+        )
+    })
+
+    # XGBoost
+    xgb_predictions = models["XGBoost"].predict(
+        X_test
+    )
+
+    xgb_mapping = {
+        0: "A",
+        1: "D",
+        2: "H"
+    }
+
+    xgb_predictions = pd.Series(
+        xgb_predictions
+    ).map(xgb_mapping)
+
+    results.append({
+        "model": "XGBoost",
+        "accuracy": accuracy_score(
+            y_test,
+            xgb_predictions
+        )
+    })
+
+    return pd.DataFrame(results)
+
+def predict_matches(
+    models,
+    fixtures,
+    features,
+    scaler
+):
+    fixtures = fixtures.copy()
+
+    X = fixtures[features]
+
+    # Logistic Regression
+    X_scaled = scaler.transform(X)
+
+    lr_predictions = models["Logistic Regression"].predict(X_scaled)
+    lr_probs = models["Logistic Regression"].predict_proba(X_scaled)
+
+    # Random Forest
+    rf_predictions = models["Random Forest"].predict(X)
+    rf_probs = models["Random Forest"].predict_proba(X)
+
+    # XGBoost
+    xgb_predictions = models["XGBoost"].predict(X)
+    xgb_probs = models["XGBoost"].predict_proba(X)
+
+    # XGBoost labels
+    xgb_mapping = {
+        0: "A",
+        1: "D",
+        2: "H"
+    }
+
+    xgb_predictions = pd.Series(
+        xgb_predictions
+    ).map(xgb_mapping).values
+
+    # Store predictions
+    fixtures["lr_prediction"] = lr_predictions
+    fixtures["rf_prediction"] = rf_predictions
+    fixtures["xgb_prediction"] = xgb_predictions
+
+    # Store probabilities
+    fixtures["lr_prob_A"] = lr_probs[:, 0]
+    fixtures["lr_prob_D"] = lr_probs[:, 1]
+    fixtures["lr_prob_H"] = lr_probs[:, 2]
+
+    fixtures["rf_prob_A"] = rf_probs[:, 0]
+    fixtures["rf_prob_D"] = rf_probs[:, 1]
+    fixtures["rf_prob_H"] = rf_probs[:, 2]
+
+    fixtures["xgb_prob_A"] = xgb_probs[:, 0]
+    fixtures["xgb_prob_D"] = xgb_probs[:, 1]
+    fixtures["xgb_prob_H"] = xgb_probs[:, 2]
+
+    return fixtures
+
+def check_predictions(predictions_df, actual_results):
+
+    correct = {
+        "Logistic Regression": 0,
+        "Random Forest": 0,
+        "XGBoost": 0
+    }
+
+    total = 0
+
+    correct_predictions = {
+        "Logistic Regression": [],
+        "Random Forest": [],
+        "XGBoost": []
+    }
+
+    wrong_predictions = {
+        "Logistic Regression": [],
+        "Random Forest": [],
+        "XGBoost": []
+    }
+
+    def convert(result, row):
+
+        if result == "H":
+            return row["home_team"]
+
+        elif result == "A":
+            return row["away_team"]
+
+        else:
+            return "Draw"
+
+    def reverse_result(result):
+
+        if result == "H":
+            return "A"
+
+        elif result == "A":
+            return "H"
+
+        else:
+            return "D"
+
+    for _, row in predictions_df.iterrows():
+
+        home = row["home_team"]
+        away = row["away_team"]
+
+        # First try normal home/away order
+        actual_match = actual_results[
+            (actual_results["home_team"] == home) &
+            (actual_results["away_team"] == away)
+        ]
+
+        reversed_match = False
+
+        # If not found, try reversed home/away order
+        if actual_match.empty:
+
+            actual_match = actual_results[
+                (actual_results["home_team"] == away) &
+                (actual_results["away_team"] == home)
+            ]
+
+            reversed_match = True
+
+        # Skip only if the match cannot be found at all
+        if actual_match.empty:
+            continue
+
+        actual = actual_match.iloc[0]["actual_result"]
+
+        # If actual-results has the teams reversed,
+        # reverse H <-> A
+        if reversed_match:
+            actual = reverse_result(actual)
+
+        total += 1
+
+        predictions = {
+            "Logistic Regression": row["lr_prediction"],
+            "Random Forest": row["rf_prediction"],
+            "XGBoost": row["xgb_prediction"]
+        }
+
+        match_key = f"{home} vs {away}"
+
+        for model, predicted in predictions.items():
+
+            if actual == predicted:
+
+                correct[model] += 1
+
+                correct_predictions[model].append(
+                    f"{match_key}: "
+                    f"prediction: {convert(predicted, row)}, "
+                    f"actual: {convert(actual, row)}"
+                )
+
+            else:
+
+                wrong_predictions[model].append(
+                    f"{match_key}: "
+                    f"prediction: {convert(predicted, row)}, "
+                    f"actual: {convert(actual, row)}"
+                )
+
+    print(f"Total matches evaluated: {total}")
+
+    print("\nAccuracy:")
+
+    for model in correct:
+
+        accuracy = (correct[model] / total) * 100
+
+        print(
+            f"{model}: "
+            f"{correct[model]}/{total} "
+            f"({accuracy:.2f}%)"
+        )
+
+    print("\nCorrect Predictions:")
+
+    for model in correct_predictions:
+
+        print(f"\n--- {model} ---")
+
+        for prediction in correct_predictions[model]:
+            print(prediction)
+
+    return correct_predictions, wrong_predictions
+
+def group_stage_plot_probs(predictions_df, model="XGBoost"):
+
+    model_prefix = {
+        "Logistic Regression": "lr",
+        "Random Forest": "rf",
+        "XGBoost": "xgb"
+    }
+
+    prefix = model_prefix[model]
+
+    # Match names
+    matches = (
+        predictions_df["home_team"] 
+        + " vs " 
+        + predictions_df["away_team"]
+    )
+
+    # Probabilities
+    prob_A = predictions_df[f"{prefix}_prob_A"]
+    prob_D = predictions_df[f"{prefix}_prob_D"]
+    prob_H = predictions_df[f"{prefix}_prob_H"]
+
+    x = np.arange(len(matches))
+    width = 0.25
+
+    plt.figure(figsize=(22, 8))
+
+    plt.bar(
+        x - width,
+        prob_H,
+        width,
+        label="Home Win"
+    )
+
+    plt.bar(
+        x,
+        prob_D,
+        width,
+        label="Draw"
+    )
+
+    plt.bar(
+        x + width,
+        prob_A,
+        width,
+        label="Away Win"
+    )
+
+    plt.xlabel("Match")
+    plt.ylabel("Probability")
+    plt.title(f"{model} - World Cup Group Stage Result Predictions")
+
+    plt.xticks(
+        x,
+        matches,
+        rotation=90
+    )
+
+    plt.ylim(0, 1)
+
+    plt.legend()
+
+    plt.tight_layout()
+
+    plt.show()
+
+def single_match_probs(
+    predictions_df,
+    home_team,
+    away_team,
+    model="XGBoost"
+):
+
+    # Find the match
+    match = predictions_df[
+        (predictions_df["home_team"] == home_team) &
+        (predictions_df["away_team"] == away_team)
+    ]
+
+    if match.empty:
+        print(f"Match not found: {home_team} vs {away_team}")
+        return
+
+    row = match.iloc[0]
+
+    # Select probability columns
+    prefix = {
+        "Logistic Regression": "lr",
+        "Random Forest": "rf",
+        "XGBoost": "xgb"
+    }[model]
+
+    home_prob = row[f"{prefix}_prob_H"]
+    draw_prob = row[f"{prefix}_prob_D"]
+    away_prob = row[f"{prefix}_prob_A"]
+
+    prediction = row[f"{prefix}_prediction"]
+
+    # Convert prediction to readable result
+    if prediction == "H":
+        predicted_result = home_team
+    elif prediction == "A":
+        predicted_result = away_team
+    else:
+        predicted_result = "Draw"
+
+    print(f"\n{home_team} vs {away_team}")
+    print(f"Model: {model}")
+
+    print(f"\n{home_team} win : {home_prob * 100:.2f}%")
+    print(f"Draw          : {draw_prob * 100:.2f}%")
+    print(f"{away_team} win : {away_prob * 100:.2f}%")
+
+    print(f"\nPrediction: {predicted_result}")
+
+def plot_single_match_probs(
+    predictions_df,
+    home_team,
+    away_team,
+    model="XGBoost"
+):
+
+    model_prefix = {
+        "Logistic Regression": "lr",
+        "Random Forest": "rf",
+        "XGBoost": "xgb"
+    }
+
+    prefix = model_prefix[model]
+
+    # Find match
+    match = predictions_df[
+        (predictions_df["home_team"] == home_team) &
+        (predictions_df["away_team"] == away_team)
+    ]
+
+    if match.empty:
+        print(f"Match not found: {home_team} vs {away_team}")
+        return
+
+    match = match.iloc[0]
+
+    # Probabilities
+    home_prob = match[f"{prefix}_prob_H"]
+    draw_prob = match[f"{prefix}_prob_D"]
+    away_prob = match[f"{prefix}_prob_A"]
+
+    labels = [
+        home_team,
+        "Draw",
+        away_team
+    ]
+
+    probabilities = [
+        home_prob,
+        draw_prob,
+        away_prob
+    ]
+
+    # Country colors
+    colors = [
+        country_colors[home_team],
+        "gray",
+        country_colors[away_team]
+    ]
+
+    # Horizontal bar chart
+    plt.figure(figsize=(9, 4))
+
+    bars = plt.barh(
+        labels,
+        probabilities,
+        color=colors
+    )
+
+    # Percentage labels
+    for bar, probability in zip(bars, probabilities):
+
+        plt.text(
+            probability + 0.01,
+            bar.get_y() + bar.get_height() / 2,
+            f"{probability * 100:.1f}%",
+            va="center",
+            fontweight="bold"
+        )
+
+    plt.xlabel("Probability")
+
+    plt.title(
+        f"{home_team} vs {away_team} - {model}"
+    )
+
+    plt.xlim(0, 1)
+
+    plt.grid(
+        axis="x",
+        alpha=0.2
+    )
+
+    plt.tight_layout()
+
+    plt.show()
+
+def prepare_round_features(fixtures, reference_df, current_elo):
+    
+    # Make a copy so the original fixture dataframe isn't changed
+    fixtures = fixtures.copy()
+    
+    # Convert date to datetime
+    fixtures["date"] = pd.to_datetime(fixtures["date"])
+    
+    # Add tournament
+    fixtures["tournament"] = "FIFA World Cup"
+    
+    # Calculate all required features
+    round_features = engineer_prediction_features(
+        fixtures,
+        reference_df,
+        current_elo
+    )
+    
+    return round_features

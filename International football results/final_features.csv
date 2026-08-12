@@ -1,0 +1,2 @@
+,date,home_team,away_team,neutral,tournament,home_scored,home_conceded,home_goal_diff,home_win_rate,home_draw_rate,away_scored,away_conceded,away_goal_diff,away_win_rate,away_draw_rate,h2h_home_wins,h2h_away_wins,h2h_draws,tournament_weight,elo_home,elo_away,elo_diff
+0,2026-07-19,Argentina,Spain,1,FIFA World Cup,2.9,0.7,2.2,1.0,0.0,1.7,0.3,1.4,0.7,0.3,0,0,0,5,1607.961691987797,1579.730431807188,28.231260180608842
