@@ -1,1 +1,2 @@
 streamlit run ".\International football results\app.py"
+uvicorn api.main:app --reload

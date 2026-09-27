@@ -1,14 +1,13 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import joblib
 import matplotlib.pyplot as plt
-import math
-from sklearn.metrics import classification_report, confusion_matrix
+import requests
+from pathlib import Path
 
 
 # ============================================================
-# PAGE
+# PAGE CONFIGURATION
 # ============================================================
 
 st.set_page_config(
@@ -17,13 +16,12 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("⚽ FIFA World Cup 2026")
-st.subheader("Machine Learning Match Prediction & Football Analytics")
-
 
 # ============================================================
-# CONSTANTS
+# CONFIGURATION
 # ============================================================
+
+API_URL = "http://127.0.0.1:8000"
 
 FEATURES = [
     "home_scored",
@@ -46,88 +44,42 @@ FEATURES = [
     "away_goal_diff"
 ]
 
-LABEL_MAP = {
-    0: "A",
-    1: "D",
-    2: "H"
-}
-
 RESULT_NAMES = {
     "A": "Away Win",
     "D": "Draw",
     "H": "Home Win"
 }
 
-
-# ============================================================
-# LOAD MODELS
-# ============================================================
-from pathlib import Path
-
-BASE_DIR = Path(__file__).resolve().parent
-MODEL_DIR = BASE_DIR / "models"
-
-
-@st.cache_resource
-def load_models():
-
-    lr = joblib.load(MODEL_DIR / "logistic_model.pkl")
-    rf = joblib.load(MODEL_DIR / "random_forest_model.pkl")
-    xgb = joblib.load(MODEL_DIR / "xgboost_model.pkl")
-
-    result_scaler = joblib.load(MODEL_DIR / "result_scaler.pkl")
-
-    home_goal_model = joblib.load(MODEL_DIR / "home_goal_model.pkl")
-    away_goal_model = joblib.load(MODEL_DIR / "away_goal_model.pkl")
-    score_scaler = joblib.load(MODEL_DIR / "score_scaler.pkl")
-
-    return (
-        lr,
-        rf,
-        xgb,
-        result_scaler,
-        home_goal_model,
-        away_goal_model,
-        score_scaler
-    )
-
-BASE_DIR = Path(__file__).resolve().parent
-MODEL_DIR = BASE_DIR / "models"
-
-lr_model = joblib.load(MODEL_DIR / "logistic_model.pkl")
-rf_model = joblib.load(MODEL_DIR / "random_forest_model.pkl")
-xgb_model = joblib.load(MODEL_DIR / "xgboost_model.pkl")
-
-result_scaler = joblib.load(MODEL_DIR / "result_scaler.pkl")
-
-home_goal_model = joblib.load(MODEL_DIR / "home_goal_model.pkl")
-away_goal_model = joblib.load(MODEL_DIR / "away_goal_model.pkl")
-score_scaler = joblib.load(MODEL_DIR / "score_scaler.pkl")
-
-MODELS = {
-    "Logistic Regression": lr_model,
-    "Random Forest": rf_model,
-    "XGBoost": xgb_model
+ROUND_FILES = {
+    "Group Stage": "wc_group_stage_features.csv",
+    "Round of 32": "r32_features.csv",
+    "Round of 16": "r16_features.csv",
+    "Quarter Finals": "qf_features.csv",
+    "Semi Finals": "semi_features.csv",
+    "Final": "final_features.csv"
 }
 
+BASE_DIR = Path(__file__).resolve().parent
+
 
 # ============================================================
-# LOAD CSV
+# DATA FUNCTIONS
 # ============================================================
+
 @st.cache_data
 def load_csv(filename):
-
+    """Load and clean a CSV file."""
     csv_path = BASE_DIR / filename
 
     df = pd.read_csv(csv_path)
 
+    # Remove accidental pandas index columns.
     df = df.loc[
         :,
         ~df.columns.str.startswith("Unnamed:")
     ]
 
     if "date" in df.columns:
-
         df["date"] = pd.to_datetime(
             df["date"],
             errors="coerce"
@@ -136,170 +88,181 @@ def load_csv(filename):
     return df
 
 
-# ============================================================
-# ROUND FILES
-# ============================================================
-
-ROUND_FILES = {
-
-    "Group Stage":
-        "wc_group_stage_features.csv",
-
-    "Round of 32":
-        "r32_features.csv",
-
-    "Round of 16":
-        "r16_features.csv",
-
-    "Quarter Finals":
-        "qf_features.csv",
-
-    "Semi Finals":
-        "semi_features.csv",
-
-    "Final":
-        "final_features.csv"
-}
-
-
-# ============================================================
-# LOAD ROUND
-# ============================================================
-
 def load_round(round_name):
+    """Load the feature dataset for a tournament round."""
+    if round_name not in ROUND_FILES:
+        raise ValueError(f"Unknown round: {round_name}")
 
-    return load_csv(
-        ROUND_FILES[round_name]
-    )
-
-
-# ============================================================
-# PREDICTION
-# ============================================================
-
-def predict_with_model(
-    model_name,
-    feature_row
-):
-
-    X = feature_row[FEATURES]
-
-    model = MODELS[model_name]
-
-    if model_name == "Logistic Regression":
-
-        X_input = result_scaler.transform(X)
-
-        probabilities = model.predict_proba(
-            X_input
-        )[0]
-
-        prediction = model.predict(
-            X_input
-        )[0]
-
-    else:
-
-        X_input = X
-
-        probabilities = model.predict_proba(
-            X_input
-        )[0]
-
-        prediction = model.predict(
-            X_input
-        )[0]
-
-    if model_name == "XGBoost":
-
-        prediction = LABEL_MAP[int(prediction)]
-
-    return prediction, probabilities
+    return load_csv(ROUND_FILES[round_name])
 
 
 # ============================================================
-# POISSON SCORE PREDICTION
+# FASTAPI FUNCTIONS
 # ============================================================
 
-def poisson_probability(
-    goals,
-    expected_goals
-):
+def test_api_connection():
+    """Check whether the FastAPI backend is running."""
+    try:
+        response = requests.get(
+            f"{API_URL}/health",
+            timeout=5
+        )
+        return response
+    except requests.RequestException:
+        return None
 
-    return (
-        np.exp(-expected_goals)
-        *
-        expected_goals ** goals
-        /
-        math.factorial(goals)
+
+def predict_match(round_name, match_index, model_name):
+    """Send a classification prediction request to FastAPI."""
+    try:
+        response = requests.post(
+            f"{API_URL}/predict",
+            json={
+                "round": round_name,
+                "match_index": match_index,
+                "model": model_name
+            },
+            timeout=30
+        )
+
+        return response
+
+    except requests.RequestException as error:
+        st.error(f"Could not connect to FastAPI: {error}")
+        return None
+
+
+def predict_score(round_name, match_index):
+    """Send a Poisson score prediction request to FastAPI."""
+    try:
+        response = requests.post(
+            f"{API_URL}/predict/score",
+            json={
+                "round": round_name,
+                "match_index": match_index
+            },
+            timeout=30
+        )
+
+        return response
+
+    except requests.RequestException as error:
+        st.error(f"Could not connect to FastAPI: {error}")
+        return None
+
+
+# ============================================================
+# DISPLAY FUNCTIONS
+# ============================================================
+
+def display_classification_result(data, home_team, away_team):
+    """Display the classification result returned by FastAPI."""
+
+    prediction = data["prediction"]
+
+    probabilities = data["probabilities"]
+
+    st.success(
+        f"🏆 Prediction: **{RESULT_NAMES[prediction]}**"
+    )
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.metric(
+            home_team,
+            f"{probabilities['home'] * 100:.1f}%"
+        )
+
+    with col2:
+        st.metric(
+            "Draw",
+            f"{probabilities['draw'] * 100:.1f}%"
+        )
+
+    with col3:
+        st.metric(
+            away_team,
+            f"{probabilities['away'] * 100:.1f}%"
+        )
+
+    chart_df = pd.DataFrame(
+        {
+            "Outcome": [
+                home_team,
+                "Draw",
+                away_team
+            ],
+            "Probability": [
+                probabilities["home"],
+                probabilities["draw"],
+                probabilities["away"]
+            ]
+        }
+    )
+
+    st.bar_chart(
+        chart_df.set_index("Outcome")
     )
 
 
-def predict_score(feature_row):
+def display_score_result(data, home_team, away_team):
+    """Display the Poisson score prediction returned by FastAPI."""
 
-    X = feature_row[FEATURES]
+    expected_goals = data["expected_goals"]
 
-    X_scaled = score_scaler.transform(X)
+    home_lambda = expected_goals["home"]
+    away_lambda = expected_goals["away"]
 
-    home_lambda = home_goal_model.predict(
-        X_scaled
-    )[0]
-
-    away_lambda = away_goal_model.predict(
-        X_scaled
-    )[0]
-
-    home_lambda = max(
-        float(home_lambda),
-        0.01
+    score_df = pd.DataFrame(
+        data["top_scores"]
     )
 
-    away_lambda = max(
-        float(away_lambda),
-        0.01
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.metric(
+            f"{home_team} Expected Goals",
+            f"{home_lambda:.2f}"
+        )
+
+    with col2:
+        st.metric(
+            f"{away_team} Expected Goals",
+            f"{away_lambda:.2f}"
+        )
+
+    best_score = data["most_likely_score"]
+
+    st.success(
+        f"Most likely score: "
+        f"**{best_score['home_goals']} - "
+        f"{best_score['away_goals']}** "
+        f"({best_score['probability'] * 100:.1f}%)"
     )
 
-    scores = []
+    top_scores = score_df.copy()
 
-    for home_goals in range(0, 7):
-
-        for away_goals in range(0, 7):
-
-            probability = (
-                poisson_probability(
-                    home_goals,
-                    home_lambda
-                )
-                *
-                poisson_probability(
-                    away_goals,
-                    away_lambda
-                )
-            )
-
-            scores.append(
-                {
-                    "home_goals": home_goals,
-                    "away_goals": away_goals,
-                    "probability": probability
-                }
-            )
-
-    score_df = pd.DataFrame(scores)
-
-    score_df["probability"] *= (
-        1 / score_df["probability"].sum()
+    top_scores["Score"] = (
+        top_scores["home_goals"]
+        .astype(int)
+        .astype(str)
+        + " - "
+        + top_scores["away_goals"]
+        .astype(int)
+        .astype(str)
     )
 
-    score_df = score_df.sort_values(
-        "probability",
-        ascending=False
-    )
+    top_scores["Probability"] = (
+        top_scores["probability"] * 100
+    ).round(2)
 
-    return (
-        home_lambda,
-        away_lambda,
-        score_df
+    st.dataframe(
+        top_scores[
+            ["Score", "Probability"]
+        ],
+        use_container_width=True,
+        hide_index=True
     )
 
 
@@ -308,6 +271,22 @@ def predict_score(feature_row):
 # ============================================================
 
 st.sidebar.title("⚙️ Prediction Settings")
+
+if st.sidebar.button("🔌 Test FastAPI"):
+    api_response = test_api_connection()
+
+    if api_response is not None and api_response.status_code == 200:
+        st.sidebar.success(
+            f"FastAPI: {api_response.json()['status']}"
+        )
+    elif api_response is not None:
+        st.sidebar.error(
+            f"FastAPI error: {api_response.status_code}"
+        )
+    else:
+        st.sidebar.error(
+            "FastAPI is not reachable."
+        )
 
 page = st.sidebar.radio(
     "Go to",
@@ -320,7 +299,17 @@ page = st.sidebar.radio(
 
 
 # ============================================================
-# TOURNAMENT PREDICTIONS
+# HEADER
+# ============================================================
+
+st.title("⚽ FIFA World Cup 2026")
+st.subheader(
+    "Machine Learning Match Prediction & Football Analytics"
+)
+
+
+# ============================================================
+# PAGE 1 — TOURNAMENT PREDICTIONS
 # ============================================================
 
 if page == "🏆 Tournament Predictions":
@@ -328,27 +317,25 @@ if page == "🏆 Tournament Predictions":
     st.header("🏆 Tournament Center")
 
     st.markdown(
-        "Explore how the machine learning models predict every stage "
-        "of the 2026 FIFA World Cup."
+        "Explore how the machine learning models predict "
+        "every stage of the 2026 FIFA World Cup."
     )
 
     st.divider()
 
-    # ========================================================
+    # --------------------------------------------------------
     # CONTROLS
-    # ========================================================
+    # --------------------------------------------------------
 
     col1, col2 = st.columns(2)
 
     with col1:
-
         round_name = st.selectbox(
             "🏟️ Tournament Round",
             list(ROUND_FILES.keys())
         )
 
     with col2:
-
         model_name = st.selectbox(
             "🤖 Prediction Model",
             [
@@ -360,38 +347,81 @@ if page == "🏆 Tournament Predictions":
 
     df = load_round(round_name)
 
-    # ========================================================
-    # PREDICT ALL MATCHES
-    # ========================================================
+    # --------------------------------------------------------
+    # MODEL DESCRIPTION
+    # --------------------------------------------------------
+
+    if model_name == "XGBoost":
+        st.info(
+            "🚀 **XGBoost** — Gradient boosting model trained "
+            "for 3-class match-result prediction."
+        )
+
+    elif model_name == "Random Forest":
+        st.info(
+            "🌲 **Random Forest** — Ensemble of decision trees "
+            "used to classify match outcomes."
+        )
+
+    else:
+        st.info(
+            "📈 **Logistic Regression** — Multiclass linear "
+            "classification model."
+        )
+
+    # --------------------------------------------------------
+    # PREDICT ALL MATCHES THROUGH FASTAPI
+    # --------------------------------------------------------
 
     predictions = []
 
-    for _, row in df.iterrows():
+    progress = st.progress(0)
 
-        feature_row = pd.DataFrame([row])
+    for position, (_, row) in enumerate(df.iterrows()):
 
-        prediction, probabilities = predict_with_model(
-            model_name,
-            feature_row
+        response = predict_match(
+            round_name,
+            position,
+            model_name
         )
+
+        if response is None:
+            st.stop()
+
+        if response.status_code != 200:
+            st.error(
+                f"FastAPI error for match {position}: "
+                f"{response.json()}"
+            )
+            st.stop()
+
+        data = response.json()
+
+        probabilities = data["probabilities"]
 
         predictions.append(
             {
                 "date": row["date"],
                 "home": row["home_team"],
                 "away": row["away_team"],
-                "prediction": prediction,
-                "home_prob": probabilities[2] * 100,
-                "draw_prob": probabilities[1] * 100,
-                "away_prob": probabilities[0] * 100
+                "prediction": data["prediction"],
+                "home_prob": probabilities["home"] * 100,
+                "draw_prob": probabilities["draw"] * 100,
+                "away_prob": probabilities["away"] * 100
             }
         )
 
+        progress.progress(
+            (position + 1) / len(df)
+        )
+
+    progress.empty()
+
     pred_df = pd.DataFrame(predictions)
 
-    # ========================================================
+    # --------------------------------------------------------
     # SUMMARY CARDS
-    # ========================================================
+    # --------------------------------------------------------
 
     home_predictions = (
         pred_df["prediction"] == "H"
@@ -408,28 +438,24 @@ if page == "🏆 Tournament Predictions":
     c1, c2, c3, c4 = st.columns(4)
 
     with c1:
-
         st.metric(
             "Matches",
             len(pred_df)
         )
 
     with c2:
-
         st.metric(
             "🏠 Home Wins",
             home_predictions
         )
 
     with c3:
-
         st.metric(
             "🤝 Draws",
             draw_predictions
         )
 
     with c4:
-
         st.metric(
             "✈️ Away Wins",
             away_predictions
@@ -437,34 +463,9 @@ if page == "🏆 Tournament Predictions":
 
     st.divider()
 
-    # ========================================================
-    # MODEL DESCRIPTION
-    # ========================================================
-
-    if model_name == "XGBoost":
-
-        st.info(
-            "🚀 **XGBoost** — Gradient boosting model trained "
-            "for 3-class match-result prediction."
-        )
-
-    elif model_name == "Random Forest":
-
-        st.info(
-            "🌲 **Random Forest** — Ensemble of decision trees "
-            "used to classify match outcomes."
-        )
-
-    else:
-
-        st.info(
-            "📈 **Logistic Regression** — Multiclass linear "
-            "classification model."
-        )
-
-    # ========================================================
+    # --------------------------------------------------------
     # MATCH CARDS
-    # ========================================================
+    # --------------------------------------------------------
 
     st.subheader(
         f"⚽ {round_name} Predictions"
@@ -475,22 +476,15 @@ if page == "🏆 Tournament Predictions":
         prediction = match["prediction"]
 
         if prediction == "H":
-
             winner = match["home"]
 
         elif prediction == "A":
-
             winner = match["away"]
 
         else:
-
             winner = "Draw"
 
         with st.container(border=True):
-
-            # -----------------------------------------------
-            # HEADER
-            # -----------------------------------------------
 
             header_col1, header_col2 = st.columns(
                 [3, 1]
@@ -501,12 +495,9 @@ if page == "🏆 Tournament Predictions":
                 date_text = ""
 
                 if pd.notna(match["date"]):
-
-                    date_text = (
-                        pd.to_datetime(
-                            match["date"]
-                        ).strftime("%d %b %Y")
-                    )
+                    date_text = pd.to_datetime(
+                        match["date"]
+                    ).strftime("%d %b %Y")
 
                 st.caption(
                     f"Match {i + 1} • {date_text}"
@@ -518,27 +509,12 @@ if page == "🏆 Tournament Predictions":
 
             with header_col2:
 
-                if prediction == "H":
-
-                    st.success(
-                        f"🏆 {winner}"
-                    )
-
-                elif prediction == "A":
-
-                    st.success(
-                        f"🏆 {winner}"
-                    )
-
+                if prediction == "D":
+                    st.warning("🤝 Draw")
                 else:
-
-                    st.warning(
-                        "🤝 Draw"
+                    st.success(
+                        f"🏆 {winner}"
                     )
-
-            # -----------------------------------------------
-            # PROBABILITIES
-            # -----------------------------------------------
 
             st.markdown(
                 "**Model probability**"
@@ -547,38 +523,31 @@ if page == "🏆 Tournament Predictions":
             p1, p2, p3 = st.columns(3)
 
             with p1:
-
                 st.metric(
                     f"🏠 {match['home']}",
                     f"{match['home_prob']:.1f}%"
                 )
 
             with p2:
-
                 st.metric(
                     "🤝 Draw",
                     f"{match['draw_prob']:.1f}%"
                 )
 
             with p3:
-
                 st.metric(
                     f"✈️ {match['away']}",
                     f"{match['away_prob']:.1f}%"
                 )
-
-            # Probability bar
 
             probability_df = pd.DataFrame(
                 {
                     match["home"]: [
                         match["home_prob"]
                     ],
-
                     "Draw": [
                         match["draw_prob"]
                     ],
-
                     match["away"]: [
                         match["away_prob"]
                     ]
@@ -590,9 +559,9 @@ if page == "🏆 Tournament Predictions":
                 height=120
             )
 
-    # ========================================================
+    # --------------------------------------------------------
     # DOWNLOAD
-    # ========================================================
+    # --------------------------------------------------------
 
     st.divider()
 
@@ -620,14 +589,151 @@ if page == "🏆 Tournament Predictions":
     st.download_button(
         "⬇️ Download Round Predictions",
         csv,
-        file_name=
-        f"{round_name.replace(' ', '_')}_predictions.csv",
+        file_name=(
+            f"{round_name.replace(' ', '_')}"
+            "_predictions.csv"
+        ),
         mime="text/csv",
         use_container_width=True
     )
 
+
 # ============================================================
-# SINGLE MATCH PREDICTOR
+# PAGE 2 — SINGLE MATCH PREDICTOR
+# ============================================================
+
+elif page == "⚽ Match Predictor":
+
+    st.header("⚽ Single Match Predictor")
+
+    # --------------------------------------------------------
+    # MATCH SELECTION
+    # --------------------------------------------------------
+
+    round_name = st.selectbox(
+        "Tournament Round",
+        list(ROUND_FILES.keys())
+    )
+
+    df = load_round(round_name)
+
+    match_labels = []
+
+    for i, row in df.iterrows():
+        match_labels.append(
+            f"{i}: {row['home_team']} vs {row['away_team']}"
+        )
+
+    selected_match = st.selectbox(
+        "Select Match",
+        match_labels
+    )
+
+    selected_index = int(
+        selected_match.split(":")[0]
+    )
+
+    row = df.iloc[selected_index]
+
+    st.divider()
+
+    st.subheader(
+        f"{row['home_team']} vs {row['away_team']}"
+    )
+
+    # --------------------------------------------------------
+    # MODEL SELECTION
+    # --------------------------------------------------------
+
+    model_name = st.selectbox(
+        "Prediction Model",
+        [
+            "XGBoost",
+            "Random Forest",
+            "Logistic Regression"
+        ]
+    )
+
+    predict_button = st.button(
+        "🔮 Predict",
+        type="primary",
+        use_container_width=True
+    )
+
+    # --------------------------------------------------------
+    # RUN PREDICTION
+    # --------------------------------------------------------
+
+    if predict_button:
+
+        # ====================================================
+        # CLASSIFICATION
+        # ====================================================
+
+        st.subheader("🏆 Match Result Prediction")
+
+        classification_response = predict_match(
+            round_name,
+            selected_index,
+            model_name
+        )
+
+        if classification_response is None:
+            st.stop()
+
+        if classification_response.status_code != 200:
+            st.error(
+                "FastAPI classification error: "
+                f"{classification_response.json()}"
+            )
+            st.stop()
+
+        classification_data = (
+            classification_response.json()
+        )
+
+        display_classification_result(
+            classification_data,
+            row["home_team"],
+            row["away_team"]
+        )
+
+        # ====================================================
+        # POISSON SCORE PREDICTION
+        # ====================================================
+
+        st.divider()
+
+        st.subheader(
+            "🎯 Poisson Score Prediction"
+        )
+
+        score_response = predict_score(
+            round_name,
+            selected_index
+        )
+
+        if score_response is None:
+            st.stop()
+
+        if score_response.status_code != 200:
+            st.error(
+                "FastAPI score prediction error: "
+                f"{score_response.json()}"
+            )
+            st.stop()
+
+        score_data = score_response.json()
+
+        display_score_result(
+            score_data,
+            row["home_team"],
+            row["away_team"]
+        )
+
+
+# ============================================================
+# PAGE 3 — MODEL EVALUATION
 # ============================================================
 
 elif page == "📊 Model Evaluation":
@@ -636,36 +742,38 @@ elif page == "📊 Model Evaluation":
 
     st.markdown(
         """
-        Compare the performance of the three machine learning models
-        used in the FIFA World Cup prediction system.
+        Compare the performance of the three machine learning
+        models used in the FIFA World Cup prediction system.
         """
     )
 
-    # ============================================================
+    # --------------------------------------------------------
     # MODEL METRICS
-    # ============================================================
+    # --------------------------------------------------------
 
-    evaluation_df = pd.DataFrame({
-        "Model": [
-            "Logistic Regression",
-            "Random Forest",
-            "XGBoost"
-        ],
-        "Accuracy": [
-            0.608,
-            0.596,
-            0.599
-        ],
-        "Macro F1": [
-            0.456,
-            0.471,
-            0.450
-        ]
-    })
+    evaluation_df = pd.DataFrame(
+        {
+            "Model": [
+                "Logistic Regression",
+                "Random Forest",
+                "XGBoost"
+            ],
+            "Accuracy": [
+                0.608,
+                0.596,
+                0.599
+            ],
+            "Macro F1": [
+                0.456,
+                0.471,
+                0.450
+            ]
+        }
+    )
 
-    # ============================================================
+    # --------------------------------------------------------
     # TOP METRICS
-    # ============================================================
+    # --------------------------------------------------------
 
     best_accuracy = evaluation_df.loc[
         evaluation_df["Accuracy"].idxmax()
@@ -699,9 +807,9 @@ elif page == "📊 Model Evaluation":
 
     st.divider()
 
-    # ============================================================
+    # --------------------------------------------------------
     # MODEL COMPARISON
-    # ============================================================
+    # --------------------------------------------------------
 
     st.subheader("🤖 Model Comparison")
 
@@ -727,9 +835,9 @@ elif page == "📊 Model Evaluation":
         hide_index=True
     )
 
-    # ============================================================
+    # --------------------------------------------------------
     # ACCURACY CHART
-    # ============================================================
+    # --------------------------------------------------------
 
     st.subheader("📈 Accuracy Comparison")
 
@@ -741,9 +849,9 @@ elif page == "📊 Model Evaluation":
         accuracy_chart
     )
 
-    # ============================================================
+    # --------------------------------------------------------
     # MACRO F1 CHART
-    # ============================================================
+    # --------------------------------------------------------
 
     st.subheader("🎯 Macro F1 Comparison")
 
@@ -759,18 +867,18 @@ elif page == "📊 Model Evaluation":
         """
         **Why Macro F1?**
 
-        Macro F1 calculates the F1 score independently for Away,
-        Draw, and Home results and then gives each class equal
-        importance. This is useful here because the dataset contains
-        fewer Draw results than Home results.
+        Macro F1 calculates the F1 score independently for
+        Away, Draw, and Home results and then gives each class
+        equal importance. This is useful here because the
+        dataset contains fewer Draw results than Home results.
         """
     )
 
     st.divider()
 
-    # ============================================================
+    # --------------------------------------------------------
     # CLASSIFICATION REPORTS
-    # ============================================================
+    # --------------------------------------------------------
 
     st.subheader(
         "📋 Classification Performance"
@@ -859,7 +967,9 @@ elif page == "📊 Model Evaluation":
         list(report_data.keys())
     )
 
-    selected_report = report_data[selected_model]
+    selected_report = report_data[
+        selected_model
+    ]
 
     st.dataframe(
         selected_report.style.format(
@@ -868,9 +978,9 @@ elif page == "📊 Model Evaluation":
         use_container_width=True
     )
 
-    # ============================================================
+    # --------------------------------------------------------
     # CLASS METRICS CHART
-    # ============================================================
+    # --------------------------------------------------------
 
     st.subheader(
         f"📊 {selected_model} — Class Performance"
@@ -882,31 +992,37 @@ elif page == "📊 Model Evaluation":
 
     st.divider()
 
-    # ============================================================
+    # --------------------------------------------------------
     # CONFUSION MATRICES
-    # ============================================================
+    # --------------------------------------------------------
 
     st.subheader("🔲 Confusion Matrix")
 
     confusion_matrices = {
 
-        "Logistic Regression": np.array([
-            [693, 11, 367],
-            [297, 12, 518],
-            [210, 8, 1482]
-        ]),
+        "Logistic Regression": np.array(
+            [
+                [693, 11, 367],
+                [297, 12, 518],
+                [210, 8, 1482]
+            ]
+        ),
 
-        "Random Forest": np.array([
-            [689, 6, 376],
-            [301, 12, 514],
-            [224, 20, 1456]
-        ]),
+        "Random Forest": np.array(
+            [
+                [689, 6, 376],
+                [301, 12, 514],
+                [224, 20, 1456]
+            ]
+        ),
 
-        "XGBoost": np.array([
-            [685, 0, 386],
-            [291, 0, 536],
-            [207, 0, 1493]
-        ])
+        "XGBoost": np.array(
+            [
+                [685, 0, 386],
+                [291, 0, 536],
+                [207, 0, 1493]
+            ]
+        )
     }
 
     cm = confusion_matrices[selected_model]
@@ -930,9 +1046,9 @@ elif page == "📊 Model Evaluation":
         use_container_width=True
     )
 
-    # ============================================================
-    # HEATMAP
-    # ============================================================
+    # --------------------------------------------------------
+    # CONFUSION MATRIX HEATMAP
+    # --------------------------------------------------------
 
     fig, ax = plt.subplots(
         figsize=(7, 5)
@@ -964,9 +1080,7 @@ elif page == "📊 Model Evaluation":
     )
 
     for i in range(3):
-
         for j in range(3):
-
             ax.text(
                 j,
                 i,
@@ -980,15 +1094,15 @@ elif page == "📊 Model Evaluation":
         ax=ax
     )
 
-    st.pyplot(
-        fig
-    )
+    st.pyplot(fig)
+
+    plt.close(fig)
 
     st.divider()
 
-    # ============================================================
+    # --------------------------------------------------------
     # CLASS DISTRIBUTION
-    # ============================================================
+    # --------------------------------------------------------
 
     st.subheader(
         "⚖️ Evaluation Dataset Distribution"
@@ -1017,16 +1131,16 @@ elif page == "📊 Model Evaluation":
 
     st.warning(
         """
-        **Key observation:** Draws are considerably harder for the
-        models to identify than Home and Away results. The confusion
-        matrices show that many actual Draws are classified as either
-        Home or Away.
+        **Key observation:** Draws are considerably harder
+        for the models to identify than Home and Away results.
+        The confusion matrices show that many actual Draws
+        are classified as either Home or Away.
         """
     )
 
-    # ============================================================
+    # --------------------------------------------------------
     # FINAL TAKEAWAY
-    # ============================================================
+    # --------------------------------------------------------
 
     st.divider()
 
@@ -1054,6 +1168,7 @@ elif page == "📊 Model Evaluation":
         classes equally.
         """
     )
+
 
 # ============================================================
 # FOOTER
